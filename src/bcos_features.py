@@ -10,22 +10,23 @@ from modules.bcosconv2d import BcosConv2d
 
 class BcosResNet18Features(nn.Module):
     """
-    ResNet18-like backbone with BcosConv2d layers for 6-channel input
+    B-cos ResNet18-like backbone for 6-channel input
+    NO ReLU, NO BatchNorm, NO MaxPooling - only B-cos convolutions with built-in MaxOut
     """
     def __init__(self, pretrained=False):
         super().__init__()
         
-        # Initial conv layer for 6-channel input
-        self.conv1 = BcosConv2d(6, 64, kernel_size=7, stride=2, padding=3, b=2)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        # Initial B-cos conv layer for 6-channel input with built-in MaxOut
+        self.conv1 = BcosConv2d(6, 64, kernel_size=7, stride=2, padding=3, max_out=2, b=2)
         
-        # ResNet blocks with BcosConv2d
+        # B-cos ResNet blocks - no BatchNorm, no ReLU, no MaxPool
         self.layer1 = self._make_layer(64, 64, 2, stride=1)
         self.layer2 = self._make_layer(64, 128, 2, stride=2)
         self.layer3 = self._make_layer(128, 256, 2, stride=2)
         self.layer4 = self._make_layer(256, 512, 2, stride=2)
+        
+        # Global average pooling instead of MaxPool
+        self.global_avgpool = nn.AdaptiveAvgPool2d((1, 1))
         
         # Initialize weights
         self._initialize_weights()
@@ -43,23 +44,24 @@ class BcosResNet18Features(nn.Module):
         return nn.Sequential(*layers)
     
     def _initialize_weights(self):
+        """Initialize B-cos weights properly"""
         for m in self.modules():
             if isinstance(m, BcosConv2d):
-                nn.init.kaiming_normal_(m.linear.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+                # B-cos specific initialization - linear activation
+                nn.init.kaiming_normal_(m.linear.weight, mode='fan_out', nonlinearity='linear')
     
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        # Pure B-cos forward - no ReLU, no BatchNorm, no MaxPool
+        x = self.conv1(x)  # Built-in MaxOut in BcosConv2d
         
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        
+        # Global average pooling
+        x = self.global_avgpool(x)
+        x = x.view(x.size(0), -1)
         
         return x
 
@@ -67,61 +69,52 @@ class BcosResNet18Features(nn.Module):
 class BcosBasicBlock(nn.Module):
     """
     Basic ResNet block with BcosConv2d
+    NO ReLU, NO BatchNorm - uses only B-cos convolutions with built-in MaxOut
     """
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
         
-        self.conv1 = BcosConv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, b=2)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = BcosConv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, max_out=2, b=2)
+        self.conv2 = BcosConv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, max_out=2, b=2)
         
-        self.conv2 = BcosConv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, b=2)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        # Shortcut connection
+        # Shortcut connection - also B-cos, no BatchNorm
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                BcosConv2d(in_channels, out_channels, kernel_size=1, stride=stride, b=2),
-                nn.BatchNorm2d(out_channels)
+                BcosConv2d(in_channels, out_channels, kernel_size=1, stride=stride, max_out=2, b=2)
             )
-        
-        self.relu2 = nn.ReLU(inplace=True)
     
     def forward(self, x):
         residual = self.shortcut(x)
         
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu1(out)
+        out = self.conv1(x)  # MaxOut built into BcosConv2d
+        out = self.conv2(out)  # MaxOut built into BcosConv2d
         
-        out = self.conv2(out)
-        out = self.bn2(out)
-        
+        # Add residual (B-cos networks maintain this)
         out += residual
-        out = self.relu2(out)
         
         return out
 
 
 class BcosResNet50Features(nn.Module):
     """
-    ResNet50-like backbone with BcosConv2d layers for 6-channel input
+    B-cos ResNet50-like backbone for 6-channel input
+    NO ReLU, NO BatchNorm, NO MaxPooling - only B-cos convolutions with built-in MaxOut
     """
     def __init__(self, pretrained=False):
         super().__init__()
         
         # Initial conv layer for 6-channel input
-        self.conv1 = BcosConv2d(6, 64, kernel_size=7, stride=2, padding=3, b=2)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.conv1 = BcosConv2d(6, 64, kernel_size=7, stride=2, padding=3, max_out=2, b=2)
         
-        # ResNet bottleneck blocks
+        # ResNet bottleneck blocks - no BatchNorm, no ReLU, no MaxPool
         self.layer1 = self._make_layer(64, 64, 256, 3, stride=1)
         self.layer2 = self._make_layer(256, 128, 512, 4, stride=2)
         self.layer3 = self._make_layer(512, 256, 1024, 6, stride=2)
         self.layer4 = self._make_layer(1024, 512, 2048, 3, stride=2)
+        
+        # Global average pooling instead of MaxPool
+        self.global_avgpool = nn.AdaptiveAvgPool2d((1, 1))
         
         # Initialize weights
         self._initialize_weights()
@@ -141,21 +134,20 @@ class BcosResNet50Features(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, BcosConv2d):
-                nn.init.kaiming_normal_(m.linear.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+                nn.init.kaiming_normal_(m.linear.weight, mode='fan_out', nonlinearity='linear')
+                if hasattr(m, 'bias') and m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
         
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        
+        x = self.global_avgpool(x)
+        x = x.view(x.size(0), -1)
         
         return x
 
@@ -163,47 +155,30 @@ class BcosResNet50Features(nn.Module):
 class BcosBottleneckBlock(nn.Module):
     """
     Bottleneck ResNet block with BcosConv2d
+    NO ReLU, NO BatchNorm - uses only B-cos convolutions with built-in MaxOut
     """
     def __init__(self, in_channels, mid_channels, out_channels, stride=1):
         super().__init__()
         
-        self.conv1 = BcosConv2d(in_channels, mid_channels, kernel_size=1, stride=1, b=2)
-        self.bn1 = nn.BatchNorm2d(mid_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-        
-        self.conv2 = BcosConv2d(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1, b=2)
-        self.bn2 = nn.BatchNorm2d(mid_channels)
-        self.relu2 = nn.ReLU(inplace=True)
-        
-        self.conv3 = BcosConv2d(mid_channels, out_channels, kernel_size=1, stride=1, b=2)
-        self.bn3 = nn.BatchNorm2d(out_channels)
+        self.conv1 = BcosConv2d(in_channels, mid_channels, kernel_size=1, stride=1, max_out=2, b=2)
+        self.conv2 = BcosConv2d(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1, max_out=2, b=2)
+        self.conv3 = BcosConv2d(mid_channels, out_channels, kernel_size=1, stride=1, max_out=2, b=2)
         
         # Shortcut connection
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                BcosConv2d(in_channels, out_channels, kernel_size=1, stride=stride, b=2),
-                nn.BatchNorm2d(out_channels)
+                BcosConv2d(in_channels, out_channels, kernel_size=1, stride=stride, max_out=2, b=2)
             )
-        
-        self.relu3 = nn.ReLU(inplace=True)
     
     def forward(self, x):
         residual = self.shortcut(x)
         
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu1(out)
-        
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu2(out)
-        
-        out = self.conv3(out)
-        out = self.bn3(out)
+        out = self.conv1(x)  # MaxOut built into BcosConv2d
+        out = self.conv2(out)  # MaxOut built into BcosConv2d
+        out = self.conv3(out)  # MaxOut built into BcosConv2d
         
         out += residual
-        out = self.relu3(out)
         
         return out
 

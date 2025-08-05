@@ -25,24 +25,19 @@ class BcosPIPNet(nn.Module):
         # B-cos backbone for 6-channel input
         if backbone == 'bcos_resnet18':
             self.backbone = bcos_resnet18_features(pretrained=pretrained)
-            backbone_out_channels = 512
+            backbone_out_channels = 512  # After global avgpool in backbone
         elif backbone == 'bcos_resnet50':
             self.backbone = bcos_resnet50_features(pretrained=pretrained)
-            backbone_out_channels = 2048
+            backbone_out_channels = 2048  # After global avgpool in backbone
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
         
-        # Prototype layers (adapted from PIP-Net)
-        self.prototype_layer = nn.Sequential(
-            nn.Conv2d(backbone_out_channels, num_prototypes, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.Softmax(dim=1)  # Softmax over prototypes for each spatial location
-        )
+        # Prototype projection from flattened backbone features
+        # Since backbone now outputs flattened features, we need to project to prototypes
+        self.prototype_projection = nn.Linear(backbone_out_channels, num_prototypes)
         
-        # Global pooling to get prototype activations
-        self.global_pool = nn.Sequential(
-            nn.AdaptiveMaxPool2d(output_size=(1, 1)),
-            nn.Flatten()
-        )
+        # Non-negative activation for prototype similarity (like in PIP-Net)
+        self.prototype_activation = nn.ReLU(inplace=True)
         
         # Projection head for contrastive learning
         self.projection_head = nn.Sequential(
@@ -77,14 +72,14 @@ class BcosPIPNet(nn.Module):
             If return_features=True: (proto_features, pooled_features, projected_features)
             Otherwise: projected_features
         """
-        # Extract features with B-cos backbone
-        backbone_features = self.backbone(x)  # (batch_size, backbone_channels, H', W')
+        # Extract features with B-cos backbone (now returns flattened features)
+        backbone_features = self.backbone(x)  # (batch_size, backbone_channels)
         
-        # Generate prototype features
-        proto_features = self.prototype_layer(backbone_features)  # (batch_size, num_prototypes, H', W')
+        # Project to prototype space
+        proto_features = self.prototype_projection(backbone_features)  # (batch_size, num_prototypes)
         
-        # Global pooling to get prototype activations
-        pooled_features = self.global_pool(proto_features)  # (batch_size, num_prototypes)
+        # Apply non-negative activation (prototype similarities should be positive)
+        pooled_features = self.prototype_activation(proto_features)  # (batch_size, num_prototypes)
         
         # Project for contrastive learning
         projected_features = self.projection_head(pooled_features)  # (batch_size, 128)
@@ -115,14 +110,14 @@ class BcosPIPNetClassifier(nn.Module):
         
         # Copy pretrained components
         self.backbone = pretrained_model.backbone
-        self.prototype_layer = pretrained_model.prototype_layer
-        self.global_pool = pretrained_model.global_pool
+        self.prototype_projection = pretrained_model.prototype_projection
+        self.prototype_activation = pretrained_model.prototype_activation
         
         # Freeze backbone if specified
         if freeze_backbone:
             for param in self.backbone.parameters():
                 param.requires_grad = False
-            for param in self.prototype_layer.parameters():
+            for param in self.prototype_projection.parameters():
                 param.requires_grad = False
         
         # Classification layer (non-negative linear like in PIP-Net)
@@ -137,10 +132,10 @@ class BcosPIPNetClassifier(nn.Module):
         """
         Forward pass for classification
         """
-        # Extract features
+        # Extract features (now returns flattened features)
         backbone_features = self.backbone(x)
-        proto_features = self.prototype_layer(backbone_features)
-        pooled_features = self.global_pool(proto_features)
+        proto_features = self.prototype_projection(backbone_features)
+        pooled_features = self.prototype_activation(proto_features)
         
         # Apply threshold during inference (like in PIP-Net)
         if inference:
