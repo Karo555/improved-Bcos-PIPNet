@@ -1,0 +1,6 @@
+[submodule "PIPNet"]
+	path = PIPNet
+	url = https://github.com/M-Nauta/PIPNet
+[submodule "B-cos"]
+	path = B-cos
+	url = https://github.com/moboehle/B-cos
