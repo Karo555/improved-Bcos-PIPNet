@@ -214,6 +214,9 @@ def train_epoch(model, train_loader, criterion, optimizer, epoch, args, writer):
         loss.backward()
         optimizer.step()
         
+        # Apply PIPNet-style weight clamping for sparsity
+        model.apply_weight_clamping()
+        
         # Statistics
         total_loss += loss.item()
         total_nll_loss += loss_dict['nll_loss'].item()
@@ -359,11 +362,16 @@ def main():
             # Compute purity
             purity_metrics = compute_prototype_purity(model, test_loader, args.device, num_classes)
             
+            # Get sparsity metrics
+            sparsity_metrics = model.get_sparsity_metrics()
+            
             # Log metrics
             print(f"Epoch {epoch}: Train Loss={train_metrics['loss']:.4f}, "
                   f"Train Acc={train_metrics['accuracy']:.2f}%, "
                   f"Test Acc={eval_metrics['accuracy']:.2f}%, "
-                  f"Purity={purity_metrics['mean_purity']:.3f}")
+                  f"Purity={purity_metrics['mean_purity']:.3f}, "
+                  f"Sparsity={sparsity_metrics['sparsity_ratio']:.3f}, "
+                  f"Active Prototypes={sparsity_metrics['active_prototypes']}/{sparsity_metrics['total_prototypes']}")
             
             if writer:
                 writer.add_scalar('Learning_Rate', lr, epoch)
@@ -377,6 +385,9 @@ def main():
                 writer.add_scalar('Test/Mean_Purity', purity_metrics['mean_purity'], epoch)
                 writer.add_scalar('Test/High_Purity_Prototypes', 
                                 purity_metrics['high_purity_prototypes'], epoch)
+                writer.add_scalar('Sparsity/Sparsity_Ratio', sparsity_metrics['sparsity_ratio'], epoch)
+                writer.add_scalar('Sparsity/Active_Prototypes', sparsity_metrics['active_prototypes'], epoch)
+                writer.add_scalar('Sparsity/Active_Weights', sparsity_metrics['active_weights'], epoch)
             
             # Save checkpoint
             is_best = eval_metrics['accuracy'] > best_accuracy

@@ -123,6 +123,94 @@ class ScoringSheetClassifier(nn.Module):
                 'class_scores': class_scores,
                 'total_class_score': contributions.sum(dim=1)
             }
+    
+    def apply_weight_clamping(self, threshold=1e-3):
+        """
+        Apply PIPNet-style aggressive weight clamping to classification layer
+        Sets weights below threshold to zero to enforce sparsity
+        """
+        with torch.no_grad():
+            self.classifier.weight.copy_(
+                torch.clamp(self.classifier.weight.data - threshold, min=0.)
+            )
+    
+    def get_sparsity_metrics(self):
+        """
+        Get sparsity metrics for monitoring prototype usage
+        
+        Returns:
+            dict: Sparsity metrics including sparsity ratio and active prototypes
+        """
+        with torch.no_grad():
+            # Classification weight sparsity
+            total_weights = torch.numel(self.classifier.weight)
+            active_weights = torch.count_nonzero(
+                torch.relu(self.classifier.weight - 1e-3)
+            ).item()
+            sparsity_ratio = (total_weights - active_weights) / total_weights
+            
+            # Count prototypes with any non-zero weights
+            active_prototypes = torch.sum(
+                torch.any(self.classifier.weight > 1e-3, dim=0)
+            ).item()
+            
+            return {
+                'sparsity_ratio': sparsity_ratio,
+                'active_prototypes': active_prototypes,
+                'total_prototypes': self.classifier.in_features,
+                'total_weights': total_weights,
+                'active_weights': active_weights
+            }
+    
+    def prune_unused_prototypes(self, data_loader, device, activation_threshold=0.1):
+        """
+        Post-training pruning: zero out prototypes that are never significantly activated
+        
+        Args:
+            data_loader: DataLoader to evaluate prototype usage
+            device: Device to run evaluation on
+            activation_threshold: Minimum activation to consider a prototype as "used"
+            
+        Returns:
+            dict: Pruning statistics
+        """
+        from tqdm import tqdm
+        
+        self.eval()
+        prototype_max_activations = torch.zeros(self.classifier.in_features, device=device)
+        
+        print(f"Evaluating prototype usage on {len(data_loader.dataset)} samples...")
+        
+        with torch.no_grad():
+            for inputs, _ in tqdm(data_loader, desc="Computing prototype activations"):
+                inputs = inputs.to(device)
+                
+                # Get prototype activations
+                _, pooled_features, _, _ = self.forward(inputs, inference=True)
+                
+                # Track maximum activation for each prototype
+                batch_max = torch.max(pooled_features, dim=0)[0]
+                prototype_max_activations = torch.maximum(prototype_max_activations, batch_max)
+        
+        # Find unused prototypes
+        unused_prototypes = prototype_max_activations < activation_threshold
+        num_unused = unused_prototypes.sum().item()
+        
+        print(f"Found {num_unused}/{self.classifier.in_features} unused prototypes")
+        
+        if num_unused > 0:
+            # Zero out unused prototypes in classification layer
+            with torch.no_grad():
+                self.classifier.weight[:, unused_prototypes] = 0.0
+            print(f"Pruned {num_unused} unused prototypes from classification layer")
+        
+        return {
+            'unused_prototypes': num_unused,
+            'total_prototypes': self.classifier.in_features,
+            'pruning_ratio': num_unused / self.classifier.in_features,
+            'unused_prototype_indices': torch.where(unused_prototypes)[0].tolist(),
+            'prototype_max_activations': prototype_max_activations.cpu().tolist()
+        }
 
 
 class FineTuningLoss(nn.Module):
