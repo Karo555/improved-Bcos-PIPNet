@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from bcos_features import bcos_resnet18_features, bcos_resnet50_features
+from bcos_features import (
+    bcos_simple_features, bcos_medium_features, bcos_large_features,
+    bcos_resnet18_features, bcos_resnet50_features  # Keep for backward compatibility
+)
 import sys
 import os
 
@@ -16,34 +19,43 @@ class BcosPIPNet(nn.Module):
     """
     def __init__(self, 
                  num_prototypes=512,
-                 backbone='bcos_resnet18',
+                 backbone='bcos_simple',
                  pretrained=False):
         super().__init__()
         
         self.num_prototypes = num_prototypes
         
         # B-cos backbone for 6-channel input
-        if backbone == 'bcos_resnet18':
+        if backbone == 'bcos_simple':
+            self.backbone = bcos_simple_features(pretrained=pretrained)
+            backbone_out_channels = 512
+        elif backbone == 'bcos_medium':
+            self.backbone = bcos_medium_features(pretrained=pretrained)
+            backbone_out_channels = 512
+        elif backbone == 'bcos_large':
+            self.backbone = bcos_large_features(pretrained=pretrained)
+            backbone_out_channels = 1024
+        elif backbone == 'bcos_resnet18':  # Backward compatibility - now uses simple CNN
             self.backbone = bcos_resnet18_features(pretrained=pretrained)
-            backbone_out_channels = 512  # After global avgpool in backbone
-        elif backbone == 'bcos_resnet50':
+            backbone_out_channels = 512
+        elif backbone == 'bcos_resnet50':  # Backward compatibility - now uses medium CNN
             self.backbone = bcos_resnet50_features(pretrained=pretrained)
-            backbone_out_channels = 2048  # After global avgpool in backbone
+            backbone_out_channels = 512
         else:
-            raise ValueError(f"Unsupported backbone: {backbone}")
+            raise ValueError(f"Unsupported backbone: {backbone}. "
+                           f"Supported: bcos_simple, bcos_medium, bcos_large, bcos_resnet18, bcos_resnet50")
         
         # Prototype projection from flattened backbone features
         # Since backbone now outputs flattened features, we need to project to prototypes
         self.prototype_projection = nn.Linear(backbone_out_channels, num_prototypes)
         
-        # Non-negative activation for prototype similarity (like in PIP-Net)
-        self.prototype_activation = nn.ReLU(inplace=True)
+        # Non-negative activation for prototype similarity - use absolute value instead of ReLU
+        # This maintains B-cos interpretability while ensuring positive prototype activations
         
-        # Projection head for contrastive learning
+        # Projection head for contrastive learning - remove ReLU to maintain B-cos principles
         self.projection_head = nn.Sequential(
             nn.Linear(num_prototypes, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 128)
+            nn.Linear(256, 128)  # Removed ReLU activation
         )
         
         # Initialize weights
@@ -78,8 +90,8 @@ class BcosPIPNet(nn.Module):
         # Project to prototype space
         proto_features = self.prototype_projection(backbone_features)  # (batch_size, num_prototypes)
         
-        # Apply non-negative activation (prototype similarities should be positive)
-        pooled_features = self.prototype_activation(proto_features)  # (batch_size, num_prototypes)
+        # Apply absolute value for non-negative activation (B-cos compatible)
+        pooled_features = torch.abs(proto_features)  # (batch_size, num_prototypes)
         
         # Project for contrastive learning
         projected_features = self.projection_head(pooled_features)  # (batch_size, 128)
@@ -111,7 +123,6 @@ class BcosPIPNetClassifier(nn.Module):
         # Copy pretrained components
         self.backbone = pretrained_model.backbone
         self.prototype_projection = pretrained_model.prototype_projection
-        self.prototype_activation = pretrained_model.prototype_activation
         
         # Freeze backbone if specified
         if freeze_backbone:
@@ -135,7 +146,7 @@ class BcosPIPNetClassifier(nn.Module):
         # Extract features (now returns flattened features)
         backbone_features = self.backbone(x)
         proto_features = self.prototype_projection(backbone_features)
-        pooled_features = self.prototype_activation(proto_features)
+        pooled_features = torch.abs(proto_features)  # Use abs instead of ReLU
         
         # Apply threshold during inference (like in PIP-Net)
         if inference:
@@ -147,9 +158,14 @@ class BcosPIPNetClassifier(nn.Module):
         return proto_features, pooled_features, logits
 
 
-def create_bcos_pipnet(num_prototypes=512, backbone='bcos_resnet18', pretrained=False):
+def create_bcos_pipnet(num_prototypes=512, backbone='bcos_simple', pretrained=False):
     """
     Factory function to create BcosPIPNet model
+    
+    Args:
+        num_prototypes: Number of prototypes to learn
+        backbone: Backbone architecture ('bcos_simple', 'bcos_medium', 'bcos_large')
+        pretrained: Whether to load pretrained weights (always False for now)
     """
     return BcosPIPNet(
         num_prototypes=num_prototypes,
@@ -165,10 +181,10 @@ def create_bcos_pipnet_classifier(pretrained_path, num_classes, freeze_backbone=
     # Load pretrained model
     checkpoint = torch.load(pretrained_path, map_location='cpu')
     
-    # Create base model
+    # Create base model - default to simple if backbone not specified
     pretrained_model = create_bcos_pipnet(
         num_prototypes=checkpoint.get('num_prototypes', 512),
-        backbone=checkpoint.get('backbone', 'bcos_resnet18')
+        backbone=checkpoint.get('backbone', 'bcos_simple')
     )
     
     # Load weights

@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from bcos_features import bcos_resnet18_features, bcos_resnet50_features
+from bcos_features import (
+    bcos_simple_features, bcos_medium_features, bcos_large_features,
+    bcos_resnet18_features, bcos_resnet50_features  # Keep for backward compatibility
+)
 import sys
 import os
 import numpy as np
@@ -86,7 +89,7 @@ class ImprovedBcosPIPNet(nn.Module):
     """
     def __init__(self, 
                  num_prototypes=512,
-                 backbone='bcos_resnet18',
+                 backbone='bcos_simple',
                  pretrained=False,
                  prototype_init='improved',
                  dropout_rate=0.1):
@@ -96,14 +99,24 @@ class ImprovedBcosPIPNet(nn.Module):
         self.dropout_rate = dropout_rate
         
         # B-cos backbone for 6-channel input
-        if backbone == 'bcos_resnet18':
+        if backbone == 'bcos_simple':
+            self.backbone = bcos_simple_features(pretrained=pretrained)
+            backbone_out_channels = 512
+        elif backbone == 'bcos_medium':
+            self.backbone = bcos_medium_features(pretrained=pretrained)
+            backbone_out_channels = 512
+        elif backbone == 'bcos_large':
+            self.backbone = bcos_large_features(pretrained=pretrained)
+            backbone_out_channels = 1024
+        elif backbone == 'bcos_resnet18':  # Backward compatibility
             self.backbone = bcos_resnet18_features(pretrained=pretrained)
             backbone_out_channels = 512
-        elif backbone == 'bcos_resnet50':
+        elif backbone == 'bcos_resnet50':  # Backward compatibility
             self.backbone = bcos_resnet50_features(pretrained=pretrained)
-            backbone_out_channels = 2048
+            backbone_out_channels = 512
         else:
-            raise ValueError(f"Unsupported backbone: {backbone}")
+            raise ValueError(f"Unsupported backbone: {backbone}. "
+                           f"Supported: bcos_simple, bcos_medium, bcos_large, bcos_resnet18, bcos_resnet50")
         
         # Improved prototype layer
         self.prototype_layer = ImprovedPrototypeLayer(
@@ -243,10 +256,16 @@ class ProgressiveTrainingStrategy:
             }
 
 
-def create_improved_bcos_pipnet(num_prototypes=512, backbone='bcos_resnet18', 
+def create_improved_bcos_pipnet(num_prototypes=512, backbone='bcos_simple', 
                                pretrained=False, dropout_rate=0.1):
     """
     Factory function to create improved BcosPIPNet model
+    
+    Args:
+        num_prototypes: Number of prototypes to learn
+        backbone: Backbone architecture ('bcos_simple', 'bcos_medium', 'bcos_large')
+        pretrained: Whether to load pretrained weights (always False for now)
+        dropout_rate: Dropout rate for regularization
     """
     return ImprovedBcosPIPNet(
         num_prototypes=num_prototypes,
